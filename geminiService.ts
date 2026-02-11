@@ -31,7 +31,13 @@ export const getChatResponse = async (
   history: { role: 'user' | 'model', parts: { text: string }[] }[], 
   userMessage: string
 ) => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || '';
+  
+  if (!apiKey) {
+    return "Lo siento, la API key de Gemini no está configurada. Por favor, configúralo en las variables de entorno.";
+  }
+  
+  const ai = new GoogleGenAI({ apiKey });
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: [...history, { role: 'user', parts: [{ text: userMessage }] }],
@@ -76,7 +82,17 @@ export const generateQuiz = async (
     return pool.slice(0, TOTAL_EXAM_SIZE);
   }
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || '';
+  if (!apiKey) {
+    // Si no hay API key, devolvemos solo preguntas de la base de datos local
+    if (pool.length >= TOTAL_EXAM_SIZE) {
+      return pool.slice(0, TOTAL_EXAM_SIZE);
+    }
+    const fallback = QUESTION_DATABASE.filter(q => !excludeQuestions.includes(q.question)).sort(() => Math.random() - 0.5);
+    return [...pool, ...fallback].slice(0, TOTAL_EXAM_SIZE);
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
   const prompt = `Genera EXACTAMENTE ${neededFromAI} preguntas para Guardias de Seguridad (GG.SS.) de Chile sobre el TEMA: "${topic}". 
   Dificultad: ${difficulty.toUpperCase()}. 
   Asegúrate de incluir aspectos técnicos vigentes en 2026.
@@ -120,34 +136,50 @@ export const generateQuiz = async (
 };
 
 export const generateStudyImage = async (prompt: string): Promise<{imageUrl: string, description: string}> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || '';
+  
+  if (!apiKey) {
+    return { 
+      imageUrl: "", 
+      description: "API key no configurada. Las imágenes generadas por IA no están disponibles." 
+    };
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
   const technicalPrompt = `Ilustración técnica para GUARDIA DE SEGURIDAD (GG.SS.) en Chile año 2026: ${prompt}. 
   Usa estrictamente uniforme de guardia actualizado: Camisa Gris Perla y Chaleco Rojo Fluorescente.`;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-image',
-    contents: {
-      parts: [{ text: technicalPrompt }]
-    },
-    config: {
-      imageConfig: {
-        aspectRatio: "1:1"
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: {
+        parts: [{ text: technicalPrompt }]
+      },
+      config: {
+        imageConfig: {
+          aspectRatio: "1:1"
+        }
+      }
+    });
+
+    let imageUrl = "";
+    let description = "Referencia visual para Guardia de Seguridad 2026.";
+
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData) {
+        imageUrl = `data:image/png;base64,${part.inlineData.data}`;
+      } else if (part.text) {
+        description = part.text;
       }
     }
-  });
 
-  let imageUrl = "";
-  let description = "Referencia visual para Guardia de Seguridad 2026.";
-
-  for (const part of response.candidates[0].content.parts) {
-    if (part.inlineData) {
-      imageUrl = `data:image/png;base64,${part.inlineData.data}`;
-    } else if (part.text) {
-      description = part.text;
-    }
+    return { imageUrl, description };
+  } catch (e) {
+    return { 
+      imageUrl: "", 
+      description: "Error al generar imagen. Por favor intenta nuevamente." 
+    };
   }
-
-  return { imageUrl, description };
 };
 
 export const getChatWithNavigation = async (
@@ -155,26 +187,37 @@ export const getChatWithNavigation = async (
   userMessage: string,
   onNavigate: (mode: AppMode) => void
 ) => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: [...history, { role: 'user', parts: [{ text: userMessage }] }],
-    config: {
-      systemInstruction: SYSTEM_INSTRUCTION + "\nInstructor GG.SS. Experto 2026.",
-      tools: [{ functionDeclarations: [navigateToFunctionDeclaration] }],
-      temperature: 0.6,
-    }
-  });
-
-  if (response.functionCalls) {
-    for (const fc of response.functionCalls) {
-      if (fc.name === 'navigateTo') {
-        const mode = (fc.args as any).mode as AppMode;
-        onNavigate(mode);
-        return `Navegando a ${mode}.`;
-      }
-    }
+  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || '';
+  
+  if (!apiKey) {
+    return "Lo siento, la API key de Gemini no está configurada. Por favor, configúralo en las variables de entorno para usar el chat.";
   }
 
-  return cleanAIResponse(response.text || "");
+  const ai = new GoogleGenAI({ apiKey });
+  
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: [...history, { role: 'user', parts: [{ text: userMessage }] }],
+      config: {
+        systemInstruction: SYSTEM_INSTRUCTION + "\nInstructor GG.SS. Experto 2026.",
+        tools: [{ functionDeclarations: [navigateToFunctionDeclaration] }],
+        temperature: 0.6,
+      }
+    });
+
+    if (response.functionCalls) {
+      for (const fc of response.functionCalls) {
+        if (fc.name === 'navigateTo') {
+          const mode = (fc.args as any).mode as AppMode;
+          onNavigate(mode);
+          return `Navegando a ${mode}.`;
+        }
+      }
+    }
+
+    return cleanAIResponse(response.text || "");
+  } catch (e) {
+    return "Error al procesar la solicitud. Por favor intenta nuevamente.";
+  }
 };
